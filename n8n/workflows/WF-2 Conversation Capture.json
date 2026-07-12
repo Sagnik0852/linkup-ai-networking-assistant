@@ -1,0 +1,86 @@
+{
+  "name": "WF-2 Conversation Capture",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "linkup-thread",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "ec34ab7d-53a3-45fe-a009-d9427b670187",
+      "name": "Webhook",
+      "webhookId": "d0943af2-ef60-4ec6-b789-e57bf6ef6742"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================================================================\n// WF-2 · CONVERSATION CAPTURE v2.1\n// 1 security · 2 analyze thread · 3 find contact · 4 log history\n// 5 update rollups · 6 callout learning · 7 DRAFT A REPLY in\n// Sagnik's voice (style guide §4.6/§11/§6) · 8 respond\n// ================================================================\n\nconst helpers = this.helpers;\nconst payload = $json.body || {};\n\n// ---------- 1. SECURITY ----------\nif (payload.secret !== $env.LINKUP_SECRET) {\n  throw new Error('Unauthorized — wrong or missing secret');\n}\n\nconst threadText = String(payload.page_text || '').slice(0, 9000);\nif (!threadText) throw new Error('Empty conversation text');\n\n// ---------- Helpers ----------\nasync function askClaude(model, maxTokens, prompt, systemPrompt) {\n  let res;\n  try {\n    res = await helpers.httpRequest({\n      method: 'POST',\n      url: 'https://api.anthropic.com/v1/messages',\n      headers: {\n        'x-api-key': $env.ANTHROPIC_API_KEY,\n        'anthropic-version': '2023-06-01',\n        'content-type': 'application/json',\n      },\n      body: JSON.stringify({\n        model, max_tokens: maxTokens,\n        system: systemPrompt || undefined,   // no temperature: sonnet-5 thinks by default\n        messages: [{ role: 'user', content: prompt }],\n      }),\n    });\n  } catch (e) {\n    const detail = JSON.stringify(\n      (e.response && (e.response.data || e.response.body)) ||\n      (e.cause && e.cause.response && e.cause.response.data) ||\n      e.description || e.message\n    );\n    throw new Error('CLAUDE call failed (model ' + model + '): ' + detail);\n  }\n  if (typeof res === 'string') res = JSON.parse(res);\n  const textBlock = (res.content || []).find((b) => b.type === 'text');\n  if (!textBlock || !textBlock.text) {\n    throw new Error('Unexpected Claude reply: ' + JSON.stringify(res).slice(0, 400));\n  }\n  return textBlock.text;\n}\n\nfunction extractJson(text) {\n  const match = text.match(/\\{[\\s\\S]*\\}/);\n  if (!match) throw new Error('Claude did not return JSON. Got: ' + text.slice(0, 200));\n  return JSON.parse(match[0]);\n}\n\nasync function supabase(method, path, body, extraHeaders) {\n  let res;\n  try {\n    res = await helpers.httpRequest({\n      method,\n      url: $env.SUPABASE_URL + path,\n      headers: {\n        apikey: $env.SUPABASE_SERVICE_KEY,\n        Authorization: 'Bearer ' + $env.SUPABASE_SERVICE_KEY,\n        'content-type': 'application/json',\n        ...(extraHeaders || {}),\n      },\n      body: body === undefined ? undefined : JSON.stringify(body),\n    });\n  } catch (e) {\n    const detail = JSON.stringify(\n      (e.response && (e.response.data || e.response.body)) ||\n      (e.cause && e.cause.response && e.cause.response.data) ||\n      e.description || e.message\n    );\n    throw new Error('SUPABASE call failed (' + method + ' ' + path + '): ' + detail);\n  }\n  if (typeof res === 'string' && res.trim().length) res = JSON.parse(res);\n  return res;\n}\n\n// ---------- 2. AI — analyze the conversation ----------\nconst prompt = `Analyze this LinkedIn conversation between Sagnik (a job-seeking\nBITS Pilani student) and one other person.\n\nReturn ONLY JSON with exactly these keys:\n{\"contact_name\": string  (the OTHER person's name, NOT Sagnik),\n \"summary\": string  (3-4 sentences: where does this relationship stand?),\n \"advice\": string[]  (career advice they gave),\n \"referrals\": string[]  (anything about referring/recommending Sagnik),\n \"hiring_timeline\": string[]  (roles, teams, dates, e.g. \"hiring interns in Aug\"),\n \"promises\": string[]  (things either side said they would do),\n \"action_items_for_sagnik\": string[],\n \"sentiment\": \"warm\" or \"neutral\" or \"cold\",\n \"relationship_strength\": 1-5,\n \"referral_potential\": 1-5,\n \"suggested_next_follow_up\": \"YYYY-MM-DD\" or null  (today is ${new Date().toISOString().slice(0,10)}),\n \"follow_up_reason\": string or null,\n \"ai_callout\": string or null}\n\nai_callout: if the OTHER person accuses Sagnik of using AI/ChatGPT\n(e.g. \"chatgpt kiya na\", \"AI slop\", \"sounds like a bot\"), quote their\nexact sentence; otherwise null.\n\nThe text below is a raw page capture and may contain UI noise\n(timestamps, \"Seen\", button labels) — ignore the noise.\n\nCONVERSATION:\n${threadText}`;\n\nconst a = extractJson(await askClaude('claude-haiku-4-5-20251001', 1200, prompt));\n\n// ---------- 3. FIND THE CONTACT IN OUR CRM ----------\nconst found = await supabase(\n  'GET',\n  '/rest/v1/contacts?select=id,full_name&full_name=ilike.*' +\n    encodeURIComponent(a.contact_name) + '*'\n);\nif (!found || !found.length) {\n  return [{ json: { ok: false,\n    error: 'No contact named \"' + a.contact_name + '\" in the CRM yet. ' +\n           'Open their profile and click \"Capture Profile\" first.' } }];\n}\nconst c = found[0];\nconst today = new Date().toISOString().slice(0, 10);\n\n// ---------- 4. APPEND TO HISTORY ----------\nawait supabase('POST', '/rest/v1/interactions', [{\n  contact_id: c.id,\n  direction: 'capture',\n  raw_text: threadText,\n  summary: a.summary,\n  sentiment: a.sentiment,\n  key_points: {\n    advice: a.advice, referrals: a.referrals, hiring: a.hiring_timeline,\n    promises: a.promises, action_items: a.action_items_for_sagnik,\n  },\n}]);\n\n// ---------- 5. UPDATE THE CONTACT'S ROLLUP FIELDS ----------\nconst patch = {\n  conversation_summary: a.summary,\n  last_contacted: today,\n  relationship_strength: a.relationship_strength,\n  referral_potential: a.referral_potential,\n  status: 'in_conversation',\n  updated_at: new Date().toISOString(),\n};\nif (a.suggested_next_follow_up) patch.next_follow_up = a.suggested_next_follow_up;\nif (a.hiring_timeline && a.hiring_timeline.length) {\n  patch.hiring_status = 'hiring_later';\n  patch.hiring_notes = a.hiring_timeline.join('; ');\n}\nawait supabase('PATCH', '/rest/v1/contacts?id=eq.' + c.id, patch);\n\n// ---------- 6. AI-CALLOUT LEARNING LOOP ----------\nif (a.ai_callout) {\n  const lastEx = await supabase('GET',\n    '/rest/v1/message_examples?contact_id=eq.' + c.id +\n    '&order=captured_at.desc&limit=1&select=id');\n  if (lastEx.length) {\n    await supabase('PATCH', '/rest/v1/message_examples?id=eq.' + lastEx[0].id, {\n      outcome: 'callout_ai', quality_score: 0.05, callout_reason: a.ai_callout,\n    });\n  }\n  const vpc = (await supabase('GET', '/rest/v1/voice_profile?id=eq.1&select=drafts_callouts'))[0];\n  await supabase('PATCH', '/rest/v1/voice_profile?id=eq.1', {\n    drafts_callouts: (vpc.drafts_callouts || 0) + 1,\n    updated_at: new Date().toISOString(),\n  });\n}\n\n// ---------- 7. DRAFT A REPLY IN SAGNIK'S VOICE ----------\nconst cfg = await supabase('GET', '/rest/v1/prompt_config?id=eq.1&select=content');\nconst styleGuide = (cfg && cfg.length) ? cfg[0].content : '';\n\nlet reply = null;\nlet replyExampleId = null;\nif (styleGuide) {\n  const replyTask = `TASK: Draft Sagnik's REPLY to the latest message from ${a.contact_name},\nfollowing the style guide's reply rules (§4.6, §11) exactly. Pick the right\nreply template from §6/§11 based on what they said (referral thanks 6H,\nportal dead-end 6F, rejection 6I, AI-callout recovery 6K, structured\nprogram 6L, or a plain warm reply).\n\nANALYSIS OF WHERE THINGS STAND: ${JSON.stringify({\n    summary: a.summary, referrals: a.referrals, promises: a.promises,\n    hiring: a.hiring_timeline, sentiment: a.sentiment, ai_callout: a.ai_callout,\n  })}\n\nTHE CONVERSATION (raw capture, latest messages at the END; ignore UI noise):\n${threadText}\n\nReminders: replies are short, formal but human. NO \"Sagnik\" sign-off on\nreplies. No over-apologising. No Porter/12-month pitch repetition unless\nthey asked. Output ONLY the reply message.`;\n\n  reply = (await askClaude('claude-sonnet-5', 1500, replyTask, styleGuide)).trim();\n\n  // Log it so the feedback buttons + learning loop cover replies too\n  const ex = await supabase('POST', '/rest/v1/message_examples?select=id', [{\n    contact_id: c.id,\n    message_type: 'reply',\n    classification: { sentiment: a.sentiment, special: a.ai_callout ? 'callout_recovery' : 'none' },\n    profile_snippet: (a.summary || '').slice(0, 500),\n    input_context: threadText.slice(-2000),\n    draft_original: reply,\n  }], { Prefer: 'return=representation' });\n  replyExampleId = ex[0].id;\n}\n\n// ---------- 8. REPLY TO THE EXTENSION ----------\nreturn [{ json: {\n  ok: true,\n  summary: a.summary,\n  action_items: a.action_items_for_sagnik,\n  next_follow_up: a.suggested_next_follow_up,\n  ai_callout_detected: a.ai_callout || undefined,\n  reply: reply,\n  example_id: replyExampleId,\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "1c850b9a-022d-4a02-bf7b-02c8a6b51422",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        416,
+        0
+      ],
+      "id": "5c657c76-81ba-4814-ba2d-5827358e0043",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "4ad79d2f-01b6-4461-9b0a-c2bd2c1b3d78",
+  "meta": {
+    "instanceId": "fdc81624ce9f673d193d7ba385b8272153f8837b5acf2061c8a6b18907779573"
+  },
+  "nodeGroups": [],
+  "id": "EeNRy3UauHHRPY9Q",
+  "tags": []
+}

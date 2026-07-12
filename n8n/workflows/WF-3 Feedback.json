@@ -1,0 +1,86 @@
+{
+  "name": "WF-3 Feedback",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "linkup-feedback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a1252d34-b7d2-4799-8f3a-93279eb2ed10",
+      "name": "Webhook",
+      "webhookId": "1582061d-1d3d-49ac-8d07-f4f9aa4156ad"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================================================================\n// WF-3 · FEEDBACK — turns your clicks into learning.\n//  used      → quality 0.9, becomes a retrieval example\n//  edited    → stores your final text, measures edit distance,\n//              Haiku diffs original vs final → ban candidates &\n//              preferences; phrases removed in 3+ edits get\n//              PROMOTED to learned_bans automatically\n//  discarded → quality 0.1, excluded from retrieval\n// ================================================================\n\nconst helpers = this.helpers;\nconst payload = $json.body || {};\nif (payload.secret !== $env.LINKUP_SECRET) {\n  throw new Error('Unauthorized — wrong or missing secret');\n}\nconst exampleId = payload.example_id;\nconst action = payload.action;         // 'used' | 'edited' | 'discarded'\nconst finalText = String(payload.final_text || '');\nif (!exampleId || !action) throw new Error('example_id and action are required');\n\n// ---------- helpers (same pattern as WF-1) ----------\nasync function askClaude(model, maxTokens, temperature, systemPrompt, userPrompt) {\n  let res;\n  try {\n    res = await helpers.httpRequest({\n      method: 'POST',\n      url: 'https://api.anthropic.com/v1/messages',\n      headers: {\n        'x-api-key': $env.ANTHROPIC_API_KEY,\n        'anthropic-version': '2023-06-01',\n        'content-type': 'application/json',\n      },\n      body: JSON.stringify({\n        model, max_tokens: maxTokens, temperature,\n        system: systemPrompt || undefined,\n        messages: [{ role: 'user', content: userPrompt }],\n      }),\n    });\n  } catch (e) {\n    const detail = (e.response && e.response.data) ? JSON.stringify(e.response.data) : e.message;\n    throw new Error('CLAUDE call failed: ' + detail);\n  }\n  if (typeof res === 'string') res = JSON.parse(res);\n  const tb = (res.content || []).find((b) => b.type === 'text');\n  if (!tb || !tb.text) throw new Error('Unexpected Claude reply: ' + JSON.stringify(res).slice(0, 400));\n  return tb.text;\n}\nfunction extractJson(text) {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (!m) throw new Error('No JSON in Claude reply: ' + text.slice(0, 200));\n  return JSON.parse(m[0]);\n}\nasync function supabase(method, path, body, extraHeaders) {\n  let res;\n  try {\n    res = await helpers.httpRequest({\n      method,\n      url: $env.SUPABASE_URL + path,\n      headers: {\n        apikey: $env.SUPABASE_SERVICE_KEY,\n        Authorization: 'Bearer ' + $env.SUPABASE_SERVICE_KEY,\n        'content-type': 'application/json',\n        ...(extraHeaders || {}),\n      },\n      body: body === undefined ? undefined : JSON.stringify(body),\n    });\n  } catch (e) {\n    const detail = (e.response && e.response.data) ? JSON.stringify(e.response.data) : e.message;\n    throw new Error('SUPABASE call failed (' + method + ' ' + path + '): ' + detail);\n  }\n  if (typeof res === 'string' && res.trim().length) res = JSON.parse(res);\n  return res;\n}\n\n// Character-level edit distance (two-row Levenshtein — fine for message-sized text)\nfunction editDistance(a, b) {\n  a = a.slice(0, 2000); b = b.slice(0, 2000);\n  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);\n  for (let i = 1; i <= a.length; i++) {\n    const cur = [i];\n    for (let j = 1; j <= b.length; j++) {\n      cur[j] = Math.min(\n        prev[j] + 1,                                   // delete\n        cur[j - 1] + 1,                                // insert\n        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)  // substitute\n      );\n    }\n    prev = cur;\n  }\n  return prev[b.length];\n}\n\n// ---------- load the example + voice profile ----------\nconst exRows = await supabase('GET', '/rest/v1/message_examples?id=eq.' + exampleId + '&select=*');\nif (!exRows.length) throw new Error('message_example not found: ' + exampleId);\nconst ex = exRows[0];\nconst vp = (await supabase('GET', '/rest/v1/voice_profile?id=eq.1&select=*'))[0];\n\nconst vpPatch = { updated_at: new Date().toISOString() };\nlet exPatch = {};\nlet learnedNote = '';\n\nif (action === 'used') {\n  exPatch = { outcome: 'used_as_is', draft_sent: ex.draft_original,\n              edit_distance: 0, quality_score: 0.9 };\n  vpPatch.drafts_used_as_is = (vp.drafts_used_as_is || 0) + 1;\n\n} else if (action === 'discarded') {\n  exPatch = { outcome: 'discarded', quality_score: 0.1 };\n\n} else if (action === 'edited') {\n  const d = editDistance(ex.draft_original, finalText);\n  exPatch = {\n    outcome: d < 20 ? 'edited_minor' : 'edited_heavy',\n    draft_sent: finalText,\n    edit_distance: d,\n    quality_score: d < 20 ? 0.7 : 0.4,\n  };\n  vpPatch.drafts_edited = (vp.drafts_edited || 0) + 1;\n\n  // ---- learn from the diff (Haiku, temp 0) ----\n  const diffPrompt = `Compare Sagnik's ORIGINAL AI draft with his EDITED final version.\nIdentify STYLISTIC changes only (wording/phrasing), not factual ones.\nReturn ONLY JSON:\n{\"removed_phrases\": string[],   // 2-6 word phrases he deleted or replaced\n \"preferred_rewrites\": [{\"from\": string, \"to\": string}]}  // phrasings he changed\nReturn empty arrays if the changes are purely factual.\n\nORIGINAL:\n${ex.draft_original}\n\nEDITED FINAL:\n${finalText}`;\n  const diff = extractJson(await askClaude('claude-haiku-4-5-20251001', 400, 0, null, diffPrompt));\n\n  // Ban candidates: count removals; promote to learned_bans at 3 strikes.\n  const candidates = Object.assign({}, vp.ban_candidates || {});\n  const bans = new Set(vp.learned_bans || []);\n  (diff.removed_phrases || []).forEach((p) => {\n    const key = p.trim().toLowerCase();\n    if (!key || key.length < 4) return;\n    candidates[key] = (candidates[key] || 0) + 1;\n    if (candidates[key] >= 3) { bans.add(key); learnedNote += ' Ban promoted: \"' + key + '\".'; }\n  });\n  // Preferences: remember the rewrite immediately (advisory, low risk).\n  const prefs = Object.assign({}, vp.learned_preferences || {});\n  (diff.preferred_rewrites || []).forEach((r) => {\n    if (r && r.from && r.to) prefs[r.from.trim().toLowerCase()] = r.to.trim();\n  });\n  vpPatch.ban_candidates = candidates;\n  vpPatch.learned_bans = Array.from(bans);\n  vpPatch.learned_preferences = prefs;\n}\n\nawait supabase('PATCH', '/rest/v1/message_examples?id=eq.' + exampleId, exPatch);\nawait supabase('PATCH', '/rest/v1/voice_profile?id=eq.1', vpPatch);\n\nreturn [{ json: { ok: true, outcome: exPatch.outcome,\n                  edit_distance: exPatch.edit_distance || 0,\n                  note: learnedNote.trim() || undefined } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "16a9abfc-1f2d-4b85-a875-c94df54d2519",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        416,
+        0
+      ],
+      "id": "4ea85ddc-b744-4c58-a9ef-129bc694f928",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "71d22f8f-7b4d-4c80-963f-71af74e204d0",
+  "meta": {
+    "instanceId": "fdc81624ce9f673d193d7ba385b8272153f8837b5acf2061c8a6b18907779573"
+  },
+  "nodeGroups": [],
+  "id": "KqY6K5aZp1UtOJ4D",
+  "tags": []
+}
