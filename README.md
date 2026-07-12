@@ -110,6 +110,6 @@ volume, no automated actions of any kind.
 
 ---
 
-*Built by [Sagnik Paul](https://www.linkedin.com/in/YOUR-PROFILE) —
+*Built by [Sagnik Paul](https://www.linkedin.com/in/sagnik-160704-paul/) —
 BITS Pilani Hyderabad, Dual Degree '27. Architecture designed in
 collaboration with Claude.*
