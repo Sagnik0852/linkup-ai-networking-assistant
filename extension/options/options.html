@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>LinkUp settings</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 520px;
+         margin: 40px auto; padding: 0 16px; }
+  label { display: block; margin-top: 16px; font-weight: 600; font-size: 14px; }
+  input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+  button { margin-top: 20px; padding: 10px 24px; border: 0; border-radius: 8px;
+           background: #0a66c2; color: #fff; font-weight: 600; cursor: pointer; }
+  #saved { color: green; margin-left: 12px; }
+  .hint { color: #555; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>LinkUp settings</h1>
+
+  <label>n8n address
+    <input id="webhookBase" placeholder="http://localhost:5678">
+  </label>
+  <div class="hint">Leave as http://localhost:5678 unless you moved n8n to a server.</div>
+
+  <label>Secret
+    <input id="secret" type="password" placeholder="paste your LINKUP_SECRET">
+  </label>
+  <div class="hint">Must be EXACTLY the LINKUP_SECRET from your n8n/.env file.</div>
+
+  <button id="save">Save</button><span id="saved"></span>
+  <script src="options.js"></script>
+</body>
+</html>

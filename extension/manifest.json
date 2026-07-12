@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "LinkUp",
+  "version": "1.0.0",
+  "description": "One-click capture of LinkedIn profiles & conversations into my personal CRM.",
+  "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": { "default_popup": "popup/popup.html" },
+  "options_ui": { "page": "options/options.html", "open_in_tab": true }
+}

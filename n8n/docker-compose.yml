@@ -1,0 +1,30 @@
+# ============================================================
+# This file tells Docker how to run n8n.
+# Start:  docker compose up -d      (run inside the n8n folder)
+# Stop:   docker compose down
+# ============================================================
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n   # the official n8n package
+    container_name: linkup-n8n
+    restart: unless-stopped           # auto-restarts if it crashes / laptop reboots
+    ports:
+      - "5678:5678"                   # n8n will be at http://localhost:5678
+    environment:
+      - N8N_SECURE_COOKIE=false       # needed because we use http:// locally
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+      # The 4 lines below COPY your keys from the .env file (next step)
+      # into n8n, so workflows can use them as $env.XXX without
+      # the keys ever being written inside a workflow.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - LINKUP_SECRET=${LINKUP_SECRET}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false  # let Code nodes read $env.XXX (our keys)
+    volumes:
+      - n8n_data:/home/node/.n8n      # saves your workflows permanently
+                                      # (without this, everything vanishes on restart!)
+volumes:
+  n8n_data:
+

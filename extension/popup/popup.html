@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>LinkUp</h1>
+  <div id="status" class="hint">Checking this page…</div>
+
+  <button id="captureProfile" hidden>📇 Capture Profile → draft message</button>
+  <button id="captureThread"  hidden>💬 Capture Conversation → update CRM</button>
+
+  <div id="result" hidden>
+    <h2 id="resultTitle"></h2>
+    <!-- Editable: tweak the draft here BEFORE choosing a feedback button -->
+    <textarea id="draft" rows="8"></textarea>
+
+    <!-- Feedback bar (cold outreach only): this is what trains the system -->
+    <div id="feedback" hidden>
+      <button id="fbUsed"    class="fb good">✅ Copy — used as-is</button>
+      <button id="fbEdited"  class="fb mid">✏️ Copy — I edited it</button>
+      <button id="fbDiscard" class="fb bad">❌ Discard</button>
+    </div>
+
+    <!-- Plain copy (conversation summaries etc.) -->
+    <button id="copy" hidden>📋 Copy to clipboard</button>
+    <div id="extra" class="hint"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

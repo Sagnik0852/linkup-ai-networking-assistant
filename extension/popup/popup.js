@@ -1,0 +1,178 @@
+// ================================================================
+// LinkUp popup v2 — capture + AI draft + FEEDBACK LOOP.
+// The three feedback buttons are what make the system learn:
+//   Used as-is → strong positive example for future retrieval
+//   Edited     → your final text is stored; diffs teach the voice profile
+//   Discard    → negative example, excluded from retrieval
+// ================================================================
+
+const $ = (id) => document.getElementById(id);
+
+let lastExampleId = null;      // which message_examples row we're rating
+let lastOriginalDraft = '';    // to detect whether you actually edited
+
+// Injected into the LinkedIn tab; grabs visible text (stable vs CSS classes).
+function extractPage() {
+  const main = document.querySelector('main') || document.body;
+  const text = main.innerText.replace(/\n{3,}/g, '\n\n');
+  return {
+    url: location.href.split('?')[0],
+    title: document.title,
+    page_text: text.slice(0, 9000),
+  };
+}
+
+async function getSettings() {
+  return chrome.storage.sync.get({ webhookBase: 'http://localhost:5678', secret: '' });
+}
+
+function setStatus(msg) { $('status').textContent = msg; }
+
+async function postJson(path, bodyObj) {
+  const settings = await getSettings();
+  const res = await fetch(settings.webhookBase + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ secret: settings.secret, ...bodyObj }),
+  });
+  return res.json();
+}
+
+// ---------------- Capture ----------------
+async function capture(kind) {
+  const settings = await getSettings();
+  if (!settings.secret) {
+    setStatus('⚠️ Right-click the LinkUp icon → Options → set your secret first.');
+    return;
+  }
+  $('captureProfile').disabled = true;
+  $('captureThread').disabled = true;
+  setStatus('Reading the page…');
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [{ result: page }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: extractPage,
+  });
+
+  setStatus(kind === 'profile'
+    ? '🤖 Drafting in your voice… (10–15s)'
+    : '🤖 Summarizing conversation… (5–10s)');
+
+  let data;
+  try {
+    data = await postJson(
+      kind === 'profile' ? '/webhook/linkup-profile' : '/webhook/linkup-thread',
+      page
+    );
+  } catch (e) {
+    setStatus('❌ Could not reach n8n. Docker running? Workflow Active?');
+    resetButtons(); return;
+  }
+  if (!data || data.ok === false) {
+    setStatus('❌ ' + ((data && data.error) || 'Check n8n → Executions for details.'));
+    resetButtons(); return;
+  }
+  showResult(kind, data);
+  resetButtons();
+}
+
+function resetButtons() {
+  $('captureProfile').disabled = false;
+  $('captureThread').disabled = false;
+}
+
+function showResult(kind, data) {
+  $('result').hidden = false;
+  if (kind === 'profile') {
+    lastExampleId = data.example_id || null;
+    lastOriginalDraft = data.message || '';
+    setStatus('✅ Draft ready. Edit if needed, then pick a feedback button — that trains the system.');
+    $('resultTitle').textContent = 'Cold outreach draft (editable):';
+    $('draft').value = data.message || '';
+    $('feedback').hidden = false;
+    $('copy').hidden = true;
+    const c = data.classification || {};
+    $('extra').textContent = 'Read as: ' + [
+      c.is_bits_alum ? 'BITSian' : 'non-BITSian',
+      c.seniority_tier, c.side, c.track_match + ' track',
+    ].join(' · ');
+  } else if (data.reply) {
+    // Conversation captured AND a reply was drafted
+    lastExampleId = data.example_id || null;
+    lastOriginalDraft = data.reply;
+    setStatus('✅ CRM updated. Suggested reply below — edit, then pick a feedback button.');
+    $('resultTitle').textContent = 'Suggested reply (editable):';
+    $('draft').value = data.reply;
+    $('feedback').hidden = false;
+    $('copy').hidden = true;
+    const items = (data.action_items || []).map((x) => '• ' + x).join('\n');
+    $('extra').textContent = 'Summary: ' + (data.summary || '') +
+      (items ? '\n\nYour action items:\n' + items : '') +
+      (data.next_follow_up ? '\nNext follow-up: ' + data.next_follow_up : '');
+  } else {
+    setStatus('✅ Conversation saved & CRM updated.');
+    $('resultTitle').textContent = 'AI summary:';
+    $('draft').value = data.summary || '';
+    $('feedback').hidden = true;
+    $('copy').hidden = false;
+    const items = (data.action_items || []).map((x) => '• ' + x).join('\n');
+    $('extra').textContent =
+      (items ? 'Your action items:\n' + items + '\n\n' : '') +
+      (data.next_follow_up ? 'Next follow-up: ' + data.next_follow_up : '');
+  }
+}
+
+// ---------------- Feedback ----------------
+async function sendFeedback(action) {
+  const finalText = $('draft').value;
+  // Copy first (except discard) so your flow is never blocked by the network.
+  if (action !== 'discarded') await navigator.clipboard.writeText(finalText);
+
+  // Honest feedback: if you clicked "used as-is" but the text changed, it's an edit.
+  let realAction = action;
+  if (action === 'used' && finalText.trim() !== lastOriginalDraft.trim()) realAction = 'edited';
+
+  setStatus(action === 'discarded' ? 'Recording discard…' : '📋 Copied! Recording feedback…');
+  try {
+    await postJson('/webhook/linkup-feedback', {
+      example_id: lastExampleId,
+      action: realAction,               // 'used' | 'edited' | 'discarded'
+      final_text: finalText,
+    });
+    setStatus(action === 'discarded'
+      ? '🗑️ Discarded — the system learns from this too.'
+      : '📋 Copied & learned. Paste it into LinkedIn and send.');
+  } catch (e) {
+    setStatus('📋 Copied. (Feedback not recorded — n8n unreachable, not critical.)');
+  }
+  if (action === 'discarded') { $('result').hidden = true; }
+}
+
+// ---------------- Wire up ----------------
+async function init() {
+  $('captureProfile').addEventListener('click', () => capture('profile'));
+  $('captureThread').addEventListener('click', () => capture('thread'));
+  $('fbUsed').addEventListener('click', () => sendFeedback('used'));
+  $('fbEdited').addEventListener('click', () => sendFeedback('edited'));
+  $('fbDiscard').addEventListener('click', () => sendFeedback('discarded'));
+  $('copy').addEventListener('click', async () => {
+    await navigator.clipboard.writeText($('draft').value);
+    $('copy').textContent = '✅ Copied!';
+    setTimeout(() => ($('copy').textContent = '📋 Copy to clipboard'), 1500);
+  });
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab && tab.url ? tab.url : '';
+  if (url.includes('linkedin.com/in/')) {
+    $('captureProfile').hidden = false;
+    setStatus('Profile page detected.');
+  } else if (url.includes('linkedin.com/messaging')) {
+    $('captureThread').hidden = false;
+    setStatus('Conversation detected. Open the thread, then capture.');
+  } else {
+    setStatus('Open a LinkedIn profile or conversation, then click LinkUp again.');
+  }
+}
+
+init();
