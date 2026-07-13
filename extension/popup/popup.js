@@ -11,14 +11,45 @@ const $ = (id) => document.getElementById(id);
 let lastExampleId = null;      // which message_examples row we're rating
 let lastOriginalDraft = '';    // to detect whether you actually edited
 
-// Injected into the LinkedIn tab; grabs visible text (stable vs CSS classes).
+// Injected into the LinkedIn tab. On messaging pages it targets the OPEN
+// thread only (not the conversation list); elsewhere it grabs main content.
 function extractPage() {
-  const main = document.querySelector('main') || document.body;
-  const text = main.innerText.replace(/\n{3,}/g, '\n\n');
+  const isMessaging = location.pathname.startsWith('/messaging');
+  let text = '';
+  let participant = null;
+
+  if (isMessaging) {
+    // Who is this thread with? (thread header shows the other person's name)
+    const header = document.querySelector(
+      '.msg-entity-lockup__entity-title, .msg-thread__link-to-profile, ' +
+      '.msg-title-bar h2, #thread-detail-jump-target'
+    );
+    if (header) participant = header.innerText.trim().split('\n')[0];
+
+    // 1st choice: the active conversation pane itself
+    const thread = document.querySelector(
+      '.msg-convo-wrapper, .msg-s-message-list-container'
+    );
+    if (thread) {
+      text = thread.innerText;
+    } else {
+      // Fallback: clone the page and CUT OUT the conversation list,
+      // so only the open thread's text remains.
+      const clone = (document.querySelector('main') || document.body).cloneNode(true);
+      clone.querySelectorAll('[class*="msg-conversations"]').forEach((n) => n.remove());
+      text = clone.innerText;
+    }
+  } else {
+    text = (document.querySelector('main') || document.body).innerText;
+  }
+
+  text = text.replace(/\n{3,}/g, '\n\n');
   return {
     url: location.href.split('?')[0],
     title: document.title,
-    page_text: text.slice(0, 9000),
+    participant: participant,                       // strong hint for the AI
+    // Threads: keep the NEWEST messages (end of text). Profiles: keep the start.
+    page_text: isMessaging ? text.slice(-9000) : text.slice(0, 9000),
   };
 }
 
