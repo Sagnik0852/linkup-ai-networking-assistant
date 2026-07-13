@@ -16,6 +16,15 @@
     <!-- Editable: tweak the draft here BEFORE choosing a feedback button -->
     <textarea id="draft" rows="8"></textarea>
 
+    <!-- v3: AI refine bar — type a change and the draft rewrites in place -->
+    <div id="refine" hidden>
+      <div class="refine-row">
+        <input id="refineInput" type="text" autocomplete="off"
+               placeholder="Ask AI to tweak it — e.g. shorter, warmer, mention their post" />
+        <button id="refineBtn" title="Apply this change">↻</button>
+      </div>
+    </div>
+
     <!-- Feedback bar (cold outreach only): this is what trains the system -->
     <div id="feedback" hidden>
       <button id="fbUsed"    class="fb good">✅ Copy — used as-is</button>
