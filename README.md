@@ -1,8 +1,8 @@
 # LinkUp — AI Networking Assistant & Self-Improving CRM
 
 > One-click LinkedIn profile capture → AI drafts outreach in *my* voice →
-> personal CRM → morning follow-up digest → a feedback loop that learns
-> from every edit I make.
+> refine it by chatting ("shorter, mention their post") → personal CRM →
+> morning follow-up digest → a feedback loop that learns from every edit I make.
 
 **Human-in-the-loop by design:** LinkUp never sends messages and never
 scrapes. It captures only pages I'm viewing, on my click, and every AI
@@ -22,14 +22,23 @@ forgets a conversation.
 
 - **Capture** (Chrome extension, MV3) — one click on a profile or message
   thread extracts the visible page text. No brittle CSS selectors: the
-  LLM is the parser, so LinkedIn markup changes don't break it.
+  LLM is the parser, so LinkedIn markup changes don't break it. On the
+  messaging page it targets only the *open* thread (not the whole inbox),
+  so it never confuses who the conversation is with.
 - **Draft** (Claude Haiku + Sonnet, orchestrated by n8n) — classifies each
   person (peer/mid/senior · engineering/business · product/finance track),
   then writes outreach following my personal 12-section style guide, which
   lives in Postgres and is editable without touching code.
+- **Refine** (Claude Haiku 4.5) — a chat bar under every draft: type a plain-
+  English change ("make it shorter", "mention I saw their post on idempotency")
+  and the message is rewritten *in place*, keeping my voice. No more manual
+  copy-edit-paste loops. ~₹0.15 per refine.
 - **Remember** (Supabase/Postgres) — a real CRM: contacts, every
   conversation snapshot (append-only), relationship scores, hiring
-  signals, referral tracking.
+  signals, referral tracking. People I messaged *before* LinkUp existed are
+  auto-created on first conversation capture, and the AI backfills their
+  profile fields (company, role, past companies, college) straight from the
+  chat — a later profile capture only enriches, never overwrites.
 - **Reply** — capturing a conversation also drafts my reply, template-
   matched to what they said (referral thanks, portal dead-end, graceful
   rejection, follow-up nudge).
@@ -78,9 +87,9 @@ Decisions I'd defend in an interview:
 ## Repo layout
 
 ```
-extension/      Chrome extension (MV3): capture, draft review, feedback buttons
+extension/      Chrome extension (MV3): capture, draft review, refine bar, feedback buttons
 n8n/            docker-compose + exported workflow JSONs (WF-1 intake,
-                WF-2 conversation, WF-3 feedback)
+                WF-2 conversation, WF-3 feedback, WF-4 refine)
 db/             Postgres schema: CRM core + learning-loop tables
 engine/         Daily follow-up digest (Python, runs on GitHub Actions)
 ARCHITECTURE.md Full technical design document
@@ -110,6 +119,6 @@ volume, no automated actions of any kind.
 
 ---
 
-*Built by [Sagnik Paul](https://www.linkedin.com/in/sagnik-160704-paul/) —
+*Built by [Sagnik Paul](https://www.linkedin.com/in/YOUR-PROFILE) —
 BITS Pilani Hyderabad, Dual Degree '27. Architecture designed in
 collaboration with Claude.*

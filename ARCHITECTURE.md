@@ -25,9 +25,10 @@ Five modules, mapped 1:1 to your five stages:
 
 | Module | What it does | Trigger |
 |---|---|---|
-| **Capture** (Chrome extension) | Grabs profile text or conversation text from the LinkedIn tab you have open; shows AI drafts for review; copy-to-clipboard | You click a button |
-| **Intake Pipeline** (n8n) | Profile text → structured contact record → personalized first-message draft → upsert to DB | Extension webhook |
-| **Conversation Pipeline** (n8n) | Thread text → summary, action items, referral/hiring signals, relationship score → update DB | Extension webhook |
+| **Capture** (Chrome extension) | Grabs profile text (or *only the open* message thread) from the LinkedIn tab you have open; shows AI drafts for review; copy-to-clipboard | You click a button |
+| **Intake Pipeline** (n8n, WF-1) | Profile text → structured contact record → personalized first-message draft → upsert to DB; merges any placeholder created by a prior conversation capture | Extension webhook |
+| **Conversation Pipeline** (n8n, WF-2) | Thread text → summary, action items, referral/hiring signals, relationship score → update DB. Auto-creates the contact if new, and backfills profile fields (company, role, past companies, college) inferred from the chat | Extension webhook |
+| **Refine Pipeline** (n8n, WF-4) | Current draft + a plain-English change request → rewritten draft in the same voice, shown in place | Extension refine bar |
 | **Follow-up Engine** (scheduled) | Daily scan of DB → who needs a nudge, why → AI-drafted follow-ups → morning email digest | Cron, 8:00 AM |
 | **Dashboard** (Next.js, later) | Funnel, reply rate, companies covered, follow-ups due, hiring pipeline | You open it |
 
@@ -297,8 +298,9 @@ Four single-purpose AI calls, each with one job, JSON-schema-constrained where s
 |---|---|---|---|---|
 | A1 | **Profile Parser** | Haiku | Raw page text | JSON contact fields |
 | A2 | **First-Message Writer** | Sonnet | Parsed contact + your template + your bio | 1 message (<300 chars) + 1 alternate |
-| A3 | **Conversation Analyst** | Haiku | Thread text + prior summary | JSON: summary, key_points, sentiment, suggested next_follow_up, strength/referral scores |
+| A3 | **Conversation Analyst** | Haiku | Thread text + prior summary | JSON: summary, key_points, sentiment, inferred profile fields, suggested next_follow_up, strength/referral scores |
 | A4 | **Follow-up Drafter** | Sonnet | Contact record + reason due + last summary | Short follow-up draft |
+| A5 | **Refine Drafter** | Haiku 4.5 | Current draft + change instruction + recipient context | Rewritten message, voice-preserving (~₹0.15/call) |
 
 Why this beats an "agent": every call is independently testable, costs are predictable, failures are localized, and there's no hidden loop that could hallucinate an action. The key robustness trick: **the LLM is the parser**. LinkedIn's DOM classes are obfuscated and change weekly; CSS-selector scrapers break constantly. Extracting *visible text* and letting Haiku structure it is nearly immune to markup changes.
 
@@ -405,7 +407,8 @@ extension/
 ├── popup/
 │   ├── popup.html         # [Capture Profile] [Capture Conversation] buttons
 │   ├── popup.js           # detects page type from URL; shows returned draft
-│   │                      # in editable textarea; [Copy] button; status toasts
+│   │                      # in editable textarea; AI refine bar (WF-4);
+│   │                      # [Copy] button; feedback buttons; status toasts
 │   └── popup.css
 └── options/
     └── options.html       # webhook URL + secret (chrome.storage.sync)
@@ -424,6 +427,8 @@ Webhook → Verify secret (IF node, 401 on fail)
         → Anthropic [A1 Haiku: parse profile]
         → Anthropic [A2 Sonnet: first message]
         → Supabase upsert contacts (on_conflict: linkedin_url)
+        → Merge any placeholder auto-created by WF-2 (same name, messaging URL):
+          re-point its interactions/message_examples, then delete the ghost
         → Respond to Webhook {contact, draft}
 ```
 
@@ -431,15 +436,32 @@ Webhook → Verify secret (IF node, 401 on fail)
 
 ```
 Webhook → Verify secret
-        → Supabase: find contact (by url, fallback name ILIKE)
-        → IF not found → Respond {error:"capture profile first"}
-        → Anthropic [A3 Haiku: analyze]
+        → Anthropic [A3 Haiku: analyze thread + infer profile fields]
+        → Supabase: find contact (by name ILIKE)
+        → IF not found → auto-create a minimal contact (status='in_conversation'),
+          pre-filled with AI-inferred fields (company, role, headline, past
+          companies, college, is_bits_alum, first_message)
+        → ELSE → backfill only the columns still empty (never overwrite a real
+          profile capture's data)
         → Supabase: insert interactions row
         → Supabase: update contact rollups (summary, last_contacted,
           next_follow_up, strength, referral_potential, status='in_conversation')
         → IF suggested_next_follow_up → insert follow_ups row
-        → Respond {summary, action_items}
+        → Respond {summary, reply draft, action_items}
 ```
+
+**WF-4 · Refine** (`POST /webhook/linkup-refine`)
+
+```
+Webhook → Verify secret
+        → Anthropic [A5 Haiku 4.5: apply the requested change to the draft,
+          preserving voice; return only the rewritten message]
+        → Respond {message}
+```
+
+The extension's refine bar calls this on every keypress of the ↻ button (or
+Enter), swapping the rewritten text into the draft field in place. Stateless
+and cheap — no DB writes, one Haiku call (~₹0.15).
 
 **WF-3 · Daily digest** — lives in **GitHub Actions**, not n8n (laptop-off problem):
 
