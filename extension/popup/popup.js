@@ -10,6 +10,8 @@ const $ = (id) => document.getElementById(id);
 
 let lastExampleId = null;      // which message_examples row we're rating
 let lastOriginalDraft = '';    // to detect whether you actually edited
+let lastKind = null;           // 'profile' | 'thread' — for the refine call
+let lastRefineContext = '';    // who/what the draft is for, passed to the refiner
 
 // Injected into the LinkedIn tab. On messaging pages it targets the OPEN
 // thread only (not the conversation list); elsewhere it grabs main content.
@@ -115,6 +117,7 @@ function resetButtons() {
 
 function showResult(kind, data) {
   $('result').hidden = false;
+  lastKind = kind;
   if (kind === 'profile') {
     lastExampleId = data.example_id || null;
     lastOriginalDraft = data.message || '';
@@ -124,10 +127,13 @@ function showResult(kind, data) {
     $('feedback').hidden = false;
     $('copy').hidden = true;
     const c = data.classification || {};
-    $('extra').textContent = 'Read as: ' + [
+    const readAs = 'Read as: ' + [
       c.is_bits_alum ? 'BITSian' : 'non-BITSian',
       c.seniority_tier, c.side, c.track_match + ' track',
     ].join(' · ');
+    $('extra').textContent = readAs;
+    lastRefineContext = 'This is a cold outreach message. ' + readAs;
+    $('refine').hidden = false;
   } else if (data.reply) {
     // Conversation captured AND a reply was drafted
     lastExampleId = data.example_id || null;
@@ -141,7 +147,11 @@ function showResult(kind, data) {
     $('extra').textContent = 'Summary: ' + (data.summary || '') +
       (items ? '\n\nYour action items:\n' + items : '') +
       (data.next_follow_up ? '\nNext follow-up: ' + data.next_follow_up : '');
+    lastRefineContext = 'This is a reply in an ongoing LinkedIn conversation. ' +
+      'Conversation so far: ' + (data.summary || '');
+    $('refine').hidden = false;
   } else {
+    $('refine').hidden = true;
     setStatus('✅ Conversation saved & CRM updated.');
     $('resultTitle').textContent = 'AI summary:';
     $('draft').value = data.summary || '';
@@ -180,6 +190,43 @@ async function sendFeedback(action) {
   if (action === 'discarded') { $('result').hidden = true; }
 }
 
+// ---------------- AI refine ----------------
+// Type a plain-English change; the current draft is rewritten in place.
+async function refine() {
+  const instruction = $('refineInput').value.trim();
+  const draft = $('draft').value;
+  if (!instruction) { setStatus('✏️ Type the change you want, then press ↻.'); return; }
+  if (!draft.trim()) { setStatus('Nothing to refine yet.'); return; }
+
+  $('refineBtn').disabled = true;
+  $('refineInput').disabled = true;
+  setStatus('🤖 Applying your change… (3–6s)');
+
+  let data;
+  try {
+    data = await postJson('/webhook/linkup-refine', {
+      draft,
+      instruction,
+      context: lastRefineContext,
+      kind: lastKind,
+    });
+  } catch (e) {
+    setStatus('❌ Could not reach n8n for the refine. Docker running?');
+    $('refineBtn').disabled = false; $('refineInput').disabled = false; return;
+  }
+
+  if (!data || data.ok === false || !data.message) {
+    setStatus('❌ ' + ((data && data.error) || 'Refine failed — try rephrasing.'));
+    $('refineBtn').disabled = false; $('refineInput').disabled = false; return;
+  }
+
+  $('draft').value = data.message;          // rewrite shown in place
+  $('refineInput').value = '';
+  $('refineBtn').disabled = false;
+  $('refineInput').disabled = false;
+  setStatus('✅ Updated. Refine again, or edit & pick a feedback button.');
+}
+
 // ---------------- Wire up ----------------
 async function init() {
   $('captureProfile').addEventListener('click', () => capture('profile'));
@@ -187,6 +234,10 @@ async function init() {
   $('fbUsed').addEventListener('click', () => sendFeedback('used'));
   $('fbEdited').addEventListener('click', () => sendFeedback('edited'));
   $('fbDiscard').addEventListener('click', () => sendFeedback('discarded'));
+  $('refineBtn').addEventListener('click', refine);
+  $('refineInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); refine(); }
+  });
   $('copy').addEventListener('click', async () => {
     await navigator.clipboard.writeText($('draft').value);
     $('copy').textContent = '✅ Copied!';
