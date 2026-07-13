@@ -19,3 +19,14 @@ textarea { width: 100%; box-sizing: border-box; font-size: 13px;
 .fb.mid  { background: #b07a1a; }
 .fb.bad  { background: #a33; }
 
+/* v3: AI refine bar */
+#refine { margin-top: 8px; }
+.refine-row { display: flex; gap: 6px; align-items: stretch; }
+#refineInput { flex: 1; box-sizing: border-box; font-size: 12px; padding: 8px;
+               border: 1px solid #ccc; border-radius: 8px; }
+#refineInput:focus { outline: none; border-color: #0a66c2; }
+#refineBtn { width: 40px; margin-top: 0; flex: 0 0 auto; font-size: 15px;
+             padding: 0; background: #5b3fb0; }
+#refineBtn:hover { background: #46318a; }
+#refineBtn:disabled { background: #b3a6dd; cursor: wait; }
+
