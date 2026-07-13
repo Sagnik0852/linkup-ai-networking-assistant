@@ -1,0 +1,85 @@
+{
+  "name": "WF-4 Refine Draft",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "linkup-refine",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3dcd9f60-da11-4db5-a61e-8db0aa37b059",
+      "id": "8005412b-8c2f-412b-831c-f1e97b564e7a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================================================================\n// LinkUp WF-4 - Refine a draft on demand.\n// The extension sends the current draft + a plain-English change\n// request; this rewrites the message in Sagnik's voice and returns it.\n// Powered by Haiku 4.5 (cheap, fast, plenty for targeted edits).\n// ================================================================\nconst payload = $json.body || $json || {};\n\n// ---------- Security ----------\nif (payload.secret !== $env.LINKUP_SECRET) {\n  return [{ json: { ok: false, error: 'Unauthorized' } }];\n}\n\nconst draft = String(payload.draft || '').trim();\nconst instruction = String(payload.instruction || '').trim();\nconst context = String(payload.context || '').slice(0, 1500);\nif (!draft) {\n  return [{ json: { ok: false, error: 'No draft to refine.' } }];\n}\nif (!instruction) {\n  return [{ json: { ok: false, error: 'Type the change you want first.' } }];\n}\n\nconst prompt = `You are refining a LinkedIn message that Sagnik (a job-seeking\nBITS Pilani student) is about to send. Apply ONLY the change he asks for. Keep\nhis voice: natural, human, specific - no corporate fluff, no cliches, no\nem-dash-heavy AI phrasing. Do not invent facts he did not state. Keep it about\nthe same length unless he explicitly asks to shorten or expand.\n\n${context ? 'CONTEXT (who this is for):\\n' + context + '\\n\\n' : ''}CURRENT MESSAGE:\n\"\"\"\n${draft}\n\"\"\"\n\nCHANGE SAGNIK WANTS:\n${instruction}\n\nReturn ONLY the revised message text - no preamble, no surrounding quotes, no\nexplanation.`;\n\nconst res = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://api.anthropic.com/v1/messages',\n  headers: {\n    'x-api-key': $env.ANTHROPIC_API_KEY,\n    'anthropic-version': '2023-06-01',\n    'content-type': 'application/json',\n  },\n  body: {\n    model: 'claude-haiku-4-5-20251001',\n    max_tokens: 700,\n    messages: [{ role: 'user', content: prompt }],\n  },\n  json: true,\n});\n\nconst revised = ((((res || {}).content || [])[0] || {}).text || '').trim();\nif (!revised) {\n  return [{ json: { ok: false, error: 'Got an empty rewrite - try rephrasing the change.' } }];\n}\nreturn [{ json: { ok: true, message: revised } }];\n"
+      },
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "f93bfabc-d216-4bb0-9cd1-db3fe0adb02a"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "604acf58-1039-4141-ac92-d492b41b6a62"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "38aebbaf-4c22-4651-91d9-0f1a08b6eb00",
+  "meta": {
+    "instanceId": "fdc81624ce9f673d193d7ba385b8272153f8837b5acf2061c8a6b18907779573"
+  },
+  "nodeGroups": [],
+  "id": "BpiSIdfnVX1iKk7g",
+  "tags": []
+}
