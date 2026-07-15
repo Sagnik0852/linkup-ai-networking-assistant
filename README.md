@@ -8,8 +8,6 @@
 scrapes. It captures only pages I'm viewing, on my click, and every AI
 draft is reviewed and sent manually by me.
 
-![demo](docs/demo.gif)
-
 ## Why I built it
 
 Networking for internships meant a daily grind: open profile → copy →
@@ -55,6 +53,26 @@ forgets a conversation.
     track + seniority + quality score) as few-shot examples
   - if a reply calls the message out as AI-written, that's auto-detected,
     the draft's quality score is nuked, and the count is tracked
+
+## Screenshots
+
+**System architecture**
+
+![Architecture](docs/SS1.png)
+
+**Cold-outreach draft, written in my voice** (illustrative text — real templates and contacts are never shown)
+
+![Outreach draft](docs/SS2.png)
+
+**Refine — type a change, the draft rewrites in place.** Same message, just from *"make it shorter and a little more casual"*:
+
+| Before | After |
+|--------|-------|
+| ![Refine before](docs/SS3A.png) | ![Refine after](docs/SS3B.png) |
+
+**Conversation → summary, signals, and action items** (contact details redacted)
+
+![Summary and action items](docs/SS3C.png)
 
 ## Architecture
 
@@ -119,6 +137,6 @@ volume, no automated actions of any kind.
 
 ---
 
-*Built by [Sagnik Paul](https://www.linkedin.com/in/sagnik-160704-paul/) —
+*Built by [Sagnik Paul](https://www.linkedin.com/in/YOUR-PROFILE) —
 BITS Pilani Hyderabad, Dual Degree '27. Architecture designed in
 collaboration with Claude.*
