@@ -40,7 +40,7 @@ forgets a conversation.
 - **Reply** — capturing a conversation also drafts my reply, template-
   matched to what they said (referral thanks, portal dead-end, graceful
   rejection, follow-up nudge).
-- **Follow up** (GitHub Actions, 8:00 AM IST daily) — a rule engine finds
+- **Follow up** (GitHub Actions, every morning) — a rule engine finds
   who's due (no reply in 5 days, promised referral going quiet, scheduled
   date reached, good relationship going cold) and emails me a digest with
   copy-ready drafts. Runs even with my laptop closed.
@@ -73,6 +73,10 @@ forgets a conversation.
 **Conversation → summary, signals, and action items** (contact details redacted)
 
 ![Summary and action items](docs/SS3C.png)
+
+**The morning follow-up digest** — lands every morning, even with my laptop closed (shown here on an "all clear" day)
+
+![Daily digest email](docs/SS4.png)
 
 ## Architecture
 
@@ -137,6 +141,5 @@ volume, no automated actions of any kind.
 
 ---
 
-*Built by [Sagnik Paul](https://www.linkedin.com/in/YOUR-PROFILE) —
-BITS Pilani Hyderabad, Dual Degree '27. Architecture designed in
-collaboration with Claude.*
+*Built by [Sagnik Paul](https://www.linkedin.com/in/sagnik-160704-paul/) —
+BITS Pilani Hyderabad. Architecture designed in collaboration with Claude.*
